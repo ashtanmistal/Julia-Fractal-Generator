@@ -1,0 +1,233 @@
+#lang racket
+(require racket/math)
+(require spd/tags)
+(require picturing-programs)
+
+;; Julia fractal generator
+;; Designed by Ashtan Mistal
+
+;; TO RUN THE PROGRAM: call (fractal-pic)
+
+;; TO CHANGE THE FRACTAL: Edit the constants cx and cy
+;; Some ideas for c values are given at:
+;; https://en.wikipedia.org/wiki/Julia_set#Quadratic_polynomials
+
+;; TO CHANGE THE COLOR: There's a fucntion definition for mapping the colors
+;; below. Racket doesn't have any built in color maps (unline Python) so we're
+;; pretty limited in that regards. I've opted for grayscale, but the color
+;; picker uses RGB so it isn't too too difficult to change
+
+; RECOMMENDED: 2048 MB OF RAM allocated; *absolute bare minimum* is 1024
+; More ram may be needed for higher width values
+
+;; Why #lang racket instead of a teaching language?
+;; - All of the functions are entirely doable in ISL with lambda, however, there
+;;   are some primitives that are not built-in, to my knowledge.
+;;   Things such as flatten (flattens a 2d list into a 1d one) and maybe others.
+
+;;==============================================================================
+;; Initial notes
+
+;; The Julia set:
+;; - J(f) is the smallest closed set containing at least three points
+;;   which is completely invariant under f.
+;;
+;; If f is an entire function, then J(f) is the boundary of the set of points
+;; which converge to infinity under iteration.
+;;
+;; The function: f(z) = z^2 + c, where c is a complex number
+;; Pseudocode available from: https://en.wikipedia.org/wiki/Julia_set#Pseudocode
+;; Fix some R > 0 such that R^2 - R >= abs(c)
+;;
+;; For each pixel from (0, WIDTH) and (0, HEIGHT), we need the following:
+;;
+;; zx = scale x to be from -R to R;         zx is the real part of z
+;; zy = scale y to be between -R and R;     xy is the imaginary part of z
+;;
+;; Set a maximum iteration of, say, 1000, and go from iter = 0 to max_iter
+;;
+;; We need to do the following:
+;;     if ((zx * zx + zy * zy) < R**2  AND  iteration < max_iteration),
+;;     then (from the pseudocode), do:
+;;       xtemp = zx * zx - zy * zy
+;;       zy = 2 * zx * zy  + cy 
+;;       zx = xtemp + cx
+;;    - Perhaps the previous three steps could be done using a local function
+;;    - We also need to update the iteration count each time (Through recursion)
+;;
+;; If the iteration is the maximum iteration, make that pixel black
+;;   - Perhaps this could be done through making that pixel false?
+;;   - Such that the data definition for the matrix is its x and y value as its
+;; index, and the value of the cell is the "color" value
+;;
+;; If the iteration is not the max iteration, call the next_iter with
+;; iteration + 1
+;; 
+;; For all of the x and y values, we would need to store those in a matrix,
+;; hence we would iterate through and print every "color" value on top of MTS
+
+;; How do we turn a value into a color??
+
+;; need to do:
+;; - Define a function to call upon iterator with a matrix (easy with for loops)
+;; - Need to make a plot generation function in order to turn the matrix into an
+;;   image -- How would we do this??
+;; - Write a scaling function for zx and zy
+;; - Write a function that turns the number of iterations into a color
+;;    - This could either be simple (using a cond with, say, 8 or 16 colours)
+;; - Write a function that takes the matrix and returns the colours
+
+;===============================================================================
+
+;; In order:
+;; 1. Make a 2D linspace of all the points to be plotted [DONE]
+;; 2. Scale those points to be between -R and R for a given R [DONE]
+;; 3. Iterate upon all of the points until the boundary conditions are hit[DONE]
+;; 4. Return the list of number of iterations until boundary condition [DONE]
+;; 5. Interpret the matrix of iterations as a color [DONE]
+;; 6. Turn the matrix of colors into an image [DONE; map-image]
+;;    a. This takes in a gray image and, for each pixel, accesses the color
+;; 7. Show the image [done]
+
+;; Constants to make:
+;; - WIDTH
+;; - the complex number c in the function f(z) = z^2 + c
+;; - The value R which is the maximum radius
+;; - The maximum number of iterations
+
+
+;; - Change iterate-list to work on vectors instead
+;; - Change definition of iterated-list (to be an iterated vector)]
+;; - Change maximum of the value to be using vector-argmax
+;; - Change list-color to work on a vector
+;; - Change color-ref to use vector-ref instead of list-ref
+
+;===============================================================================
+;; CONSTANTS:
+
+(define WIDTH 500) ; The image must be square for transpose function to work
+(define c -0.6+1.414568475i)  ; This constant is not used but gives an idea of the #
+
+;(define cx -0.8)  ; Real part of c
+;(define cy 0.156) ; Imaginary part of c
+
+(define cx -0.6) ; Another test value
+(define cy 1.414568475)
+(define R 2); For the value of c, R^2 - R must be >= 0.815068
+(define max_iter 1000)
+(define IMAGE-GRAY (square WIDTH "solid" "gray"))
+
+;===============================================================================
+; DATA DEFINITIONS:
+
+(@htdd Position)
+;(define-struct pos (X Y))
+(struct pos [X Y])
+;; pos is one of:
+;; - Number
+;; - Number
+;===============================================================================
+;; FUNCTIONS
+
+(@htdf listmaker)
+(@signature Natural Natural Number -> (listof Number))
+;; Creates a list, of length y, x number of times, where y is from [-r r)
+
+(define (listmaker x y r)  ; Width
+  (local [(define fn (lambda (z)
+                       (/ (- z (/ y 2)) (/ y (* 2 r)))))] ;Normalization fn
+    (cond [(zero? x) empty]
+          [else
+           (cons (build-list y fn)
+                 (listmaker (sub1 x) y r))])))
+
+
+(@htdf transpose)
+(@signature (listof X) -> (listof X))  ; Not sure if this is right
+;; "transposes" a list of lists (linear algebra matrix transpose)
+(define (transpose xss)
+  (apply map list xss))
+
+
+(@htdf posmaker)
+(@signature (listof Number) (listof Number) -> (listof Position))
+;; takes in 2 lists and returns a "tuple" of the two values at every position
+;; Required for the mapping of the iterator below, so that map is only taking in
+;; one list at a time
+(define (posmaker x y)
+  (cond [(or (empty? x) (empty? y)) empty]
+        [(cons (pos (first x) (first y)) (posmaker (rest x) (rest y)))]))
+
+
+(@htdf iterator)
+(@signature Number Number Natural -> Natural)
+;; This function iterates through each value until coundary conditions are met
+(define (iterator zx zy count)
+  (cond [(> (+ (* zx zx) (* zy zy)) (sqr R)) count]
+        [(>= count max_iter) max_iter]
+        [else (local [(define (xtemp)
+                        (- (* zx zx) (* zy zy)))]
+                (iterator (+ (xtemp) cx) (+ (* 2 zx zy) cy) (add1 count)))]))
+
+
+(@htdf iterate-vector)
+;(@signature (listof Position) -> (listof Natural))
+;; Takes in a list of positions and sends them to the iterator
+(define (iterate-vector lop)
+  (local [(define (fn e)
+            (iterator (pos-X e) (pos-Y e) 0))]
+    (vector-map (lambda (e)
+           (iterator (pos-X e) (pos-Y e) 0)); Could be added as another local
+         lop)))
+
+
+;; CONSTANT:
+;; This is the iterated list; this is used here and called upon later to prevent
+;; re-calculation
+(define iterated-vector (iterate-vector
+                       (list->vector (posmaker (flatten (listmaker WIDTH WIDTH 2))
+                                 (flatten (transpose
+                                           (listmaker WIDTH WIDTH R)))))))
+;; Calculates the maximum of the iterated list
+(define maxv (vector-argmax max iterated-vector))
+
+(@htdf point-color)
+(@signature Number -> Color)
+;; This calculates the color that will be plotted at any given iteration value.
+;; Essentially turns the range of iteration magnitudes and determines how light
+;; that pixel will be
+(define (point-color x)
+    (make-color (ceiling (* 255 (/ x maxv)))
+                (ceiling (* 255 (/ x maxv)))
+                (ceiling (* 255 (/ x maxv)))))
+
+
+;; Mapping function for point-color; this whole thing could be done using local
+(define (vector-color l)
+  (vector-map point-color l))
+
+
+;; Applies the list-color mapping on to the iterated list made above
+(define color-vector
+  (vector-color 
+   iterated-vector))
+
+
+(@htdf color-ref)
+(@signature (listof Number) Natural Natural Natural -> Number)
+;; This takes in a "single dimensional" list that represents the 2d matrix of
+;; values, and given an X and Y value, returns the value of the matrix at that
+;; point, given the constant row length
+(define (color-ref list row col row-length)
+  (vector-ref list (+ row (* col row-length))))
+
+
+;; This function takes in (nothing), but maps the fractal color unto each pixel
+;; for the starting image. It does not matter what the starting image looks like
+;; so long as it has the same width and height of the fractal image placed. 
+(define (fractal-pic)
+  (local [(define (fractal-color x y c)
+            (color-ref color-vector x y WIDTH))]
+    (map-image
+     fractal-color
+     IMAGE-GRAY)))
